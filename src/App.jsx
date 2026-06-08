@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { fetchExpenses, insertExpense, updateExpense, deleteExpense, deleteExpenses } from './db.js'
-import { DB_READY } from './supabase.js'
+import { DB_READY, supabase } from './supabase.js'
+import Auth from './Auth.jsx'
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || ''
 
@@ -255,6 +256,7 @@ function DbBadge() {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
+  const [user, setUser]           = useState(undefined)  // undefined=loading, null=logged out
   const [stage, setStage]         = useState('home')
   const [expenses, setExpenses]   = useState([])
   const [loading, setLoading]     = useState(true)
@@ -273,11 +275,27 @@ export default function App() {
   const [showChart, setShowChart] = useState(false)
   const fileRef = useRef(); const cameraRef = useRef()
 
+  // ── Auth session ────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!supabase) { setUser(null); return }
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user || null))
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+      setUser(session?.user || null)
+      if (!session) { setExpenses([]); setStage('home') }
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  const signOut = async () => { await supabase?.auth.signOut(); setUser(null); setExpenses([]) }
+
+  // ── Load expenses when user resolves ────────────────────────────────────────
+  useEffect(() => {
+    if (user === undefined) return
+    setLoading(true)
     fetchExpenses()
       .then(rows => { setExpenses(rows); setLoading(false) })
       .catch(e   => { setDbError(e.message); setLoading(false) })
-  }, [])
+  }, [user])
 
   // ── Vision API ──────────────────────────────────────────────────────────────
   const scanWithClaude = useCallback(async (base64, mediaType) => {
@@ -332,7 +350,7 @@ export default function App() {
     if (!category) { setError('Please select a category.'); return }
     setSaving(true)
     try {
-      const saved = await insertExpense({ ...extracted, category, image: imagePreview })
+      const saved = await insertExpense({ ...extracted, category, image: imagePreview }, user?.id)
       setExpenses(prev => [saved, ...prev]); setCategory(''); setImage(null); setStage('saved')
     } catch (e) { setError(`Failed to save: ${e.message}`) }
     finally { setSaving(false) }
@@ -372,6 +390,16 @@ export default function App() {
   const visIds    = filtered.map(e => e.id)
   const allSelVis = visIds.length > 0 && visIds.every(id => selected.has(id))
 
+  // ── Auth gate ───────────────────────────────────────────────────────────────
+  if (user === undefined) return (
+    <div style={{ minHeight: '100vh', background: C.primaryBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ width: '28px', height: '28px', border: `2px solid ${C.border}`, borderTop: `2px solid ${C.accent}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  )
+
+  if (!user && DB_READY) return <Auth onAuth={setUser} />
+
   return (
     <div style={{ minHeight: '100vh', background: `linear-gradient(160deg,${C.primaryBg},${C.primaryDark} 60%,${C.primaryBg})`, fontFamily: 'Georgia, serif', color: C.white }}>
       <style>{`
@@ -394,12 +422,23 @@ export default function App() {
             <div style={{ fontSize: '20px', fontWeight: '700', color: C.white, letterSpacing: '1px' }}>ExpenseScan</div>
             <DbBadge />
           </div>
+          {user && (
+            <div style={{ fontSize: '11px', color: C.whiteMuted, marginTop: '2px' }}>
+              {user.user_metadata?.full_name || user.email?.split('@')[0]}
+            </div>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={() => { setStage('home'); setError(''); exitSel() }} style={S.nav(['home','scanning'].includes(stage))}>Scan</button>
           <button onClick={() => { setStage('list'); exitSel() }} style={S.nav(['list','saved'].includes(stage))}>
             Expenses {expenses.length > 0 && <span style={{ background: C.accent, borderRadius: '50%', padding: '1px 7px', fontSize: '11px', marginLeft: '5px', color: C.white }}>{expenses.length}</span>}
           </button>
+          {user && (
+            <button onClick={signOut} title="Sign out"
+              style={{ background: C.whiteFaint, border: `1px solid ${C.border}`, color: C.whiteMuted, borderRadius: '8px', padding: '8px 11px', fontSize: '14px', cursor: 'pointer', lineHeight: 1 }}>
+              ⎋
+            </button>
+          )}
         </div>
       </div>
 
