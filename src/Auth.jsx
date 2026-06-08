@@ -58,24 +58,33 @@ export default function Auth({ onAuth }) {
     if (!email)              { setError('Email is required.'); return }
     if (password.length < 8) { setError('Password must be at least 8 characters.'); return }
     setLoad(true); clear()
-    const { data, error: e } = await supabase.auth.signUp({
-      email, password,
+
+    // Create account
+    const { error: signUpErr } = await supabase.auth.signUp({
+      email,
+      password,
       options: { data: { full_name: name.trim() } }
     })
+    if (signUpErr) { setLoad(false); setError(signUpErr.message); return }
+
+    // Immediately sign in - no email confirmation step
+    const { data, error: signInErr } = await supabase.auth.signInWithPassword({ email, password })
     setLoad(false)
-    if (e) { setError(e.message); return }
-    if (data.user && !data.session) {
-      setMsg('Account created. Check your email to confirm, then sign in.')
+    if (signInErr) {
+      // Account created but auto-login failed - prompt manual sign in
+      setMsg('Account created successfully. Please sign in.')
       setMode('login')
-    } else if (data.user) {
-      onAuth(data.user)
+      return
     }
+    onAuth(data.user)
   }
 
   const handleForgot = async () => {
     if (!email) { setError('Enter your email address.'); return }
     setLoad(true); clear()
-    const { error: e } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin })
+    const { error: e } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin
+    })
     setLoad(false)
     if (e) { setError(e.message); return }
     setMsg('Password reset link sent. Check your inbox.')
@@ -116,6 +125,7 @@ export default function Auth({ onAuth }) {
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+
           {mode === 'signup' && (
             <div>
               <label style={S.label}>Full Name</label>
@@ -148,9 +158,11 @@ export default function Auth({ onAuth }) {
 
         <button onClick={submit} disabled={loading}
           style={{ width: '100%', padding: '16px', background: `linear-gradient(90deg,${C.accent},${C.primary})`, border: 'none', borderRadius: '12px', color: C.white, fontSize: '16px', fontWeight: '700', cursor: 'pointer', letterSpacing: '1px', fontFamily: 'inherit', textTransform: 'uppercase', opacity: loading ? .6 : 1 }}>
-          {loading       ? 'Please wait...'   :
-           mode === 'login'  ? 'Sign In'          :
-           mode === 'signup' ? 'Create Account'   : 'Send Reset Link'}
+          {loading
+            ? 'Please wait...'
+            : mode === 'login'  ? 'Sign In'
+            : mode === 'signup' ? 'Create Account'
+            : 'Send Reset Link'}
         </button>
 
         <div style={{ marginTop: '22px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '12px' }}>
